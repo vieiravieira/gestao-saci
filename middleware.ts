@@ -1,10 +1,14 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
+import type { NextRequest, NextFetchEvent } from 'next/server'
 
-export async function middleware(request: NextRequest) {
-  // ⚠️ CRÍTICO: supabaseResponse deve ser criado com { request } para
-  // preservar os cookies de sessão (corrige o loop de login)
+type CookieToSet = {
+  name: string
+  value: string
+  options?: Record<string, any>
+}
+
+export async function middleware(request: NextRequest, _event: NextFetchEvent) {
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -14,20 +18,25 @@ export async function middleware(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll() {
+        getAll(): { name: string; value: string }[] {
           return request.cookies.getAll()
         },
-        setAll(cookiesToSet) {
+
+        setAll(cookiesToSet: CookieToSet[]) {
           // Atualiza cookies no REQUEST
-          cookiesToSet.forEach(({ name, value }) =>
+          cookiesToSet.forEach(({ name, value }: CookieToSet) => {
             request.cookies.set(name, value)
-          )
-          // Recria supabaseResponse com request atualizado
-          supabaseResponse = NextResponse.next({ request })
-          // Atualiza cookies na RESPONSE para o browser salvar
-          cookiesToSet.forEach(({ name, value, options }) =>
+          })
+
+          // Recria response com request atualizado
+          supabaseResponse = NextResponse.next({
+            request,
+          })
+
+          // Atualiza cookies na RESPONSE (browser)
+          cookiesToSet.forEach(({ name, value, options }: CookieToSet) => {
             supabaseResponse.cookies.set(name, value, options)
-          )
+          })
         },
       },
     }
@@ -39,17 +48,16 @@ export async function middleware(request: NextRequest) {
 
   const isAuthPage = request.nextUrl.pathname.startsWith('/auth')
 
-  // Se não estiver logado e não for página de auth → login
+  // Não logado → manda pro login
   if (!user && !isAuthPage) {
     return NextResponse.redirect(new URL('/auth/login', request.url))
   }
 
-  // Se já estiver logado e tentar acessar login → dashboard
+  // Já logado → bloqueia voltar pro login
   if (user && isAuthPage) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
-  // CRÍTICO: retorna supabaseResponse (não um novo NextResponse.next())
   return supabaseResponse
 }
 
